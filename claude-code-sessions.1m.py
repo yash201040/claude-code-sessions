@@ -11,12 +11,12 @@ Each transcript is parsed once and cached by mtime and size, so a refresh only
 re-reads sessions that changed. Titles follow the picker's order: /rename title,
 then the generated title, then the first prompt. Read-only; no network.
 
-Invoked as `claude-sessions.1m.py open <session-id>` when a row is clicked. With
+Invoked as `claude-code-sessions.1m.py open <session-id>` when a row is clicked. With
 Supacode installed, a session that is already running is refocused in its Supacode tab
 (found through the running process's SUPACODE_TAB_ID); otherwise its folder is opened
 in Supacode and `claude --resume <id>` runs in a new tab. Without Supacode, it resumes
 in a new Terminal window. On failure it notifies and copies the command.
-`claude-sessions.1m.py index` prints the session list as JSON for the search panel
+`claude-code-sessions.1m.py index` prints the session list as JSON for the search panel
 (~/.local/share/claude-code-sessions/session-search).
 
 The cache and index hold words from every conversation, so they are readable by the

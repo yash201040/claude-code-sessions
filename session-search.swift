@@ -1,5 +1,5 @@
 // Spotlight-style fuzzy search over Claude Code sessions, opened from the SwiftBar menu.
-// Usage: session-search <path to claude-sessions.1m.py>
+// Usage: session-search <path to claude-code-sessions.1m.py>
 // Reads the index the plugin writes (~/.cache/claude-code-sessions/index.json) so the window
 // opens instantly, refreshes it in the background with `<plugin> index`, and hands the
 // choice to `<plugin> open <id>`. Titles match fuzzily; conversation text matches by word.

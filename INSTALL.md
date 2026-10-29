@@ -8,7 +8,7 @@ A SwiftBar menu that lists your Claude Code sessions grouped by folder, with a S
 
 ## Files
 
-- `claude-sessions.1m.py`: the SwiftBar plugin. It refreshes every minute.
+- `claude-code-sessions.1m.py`: the SwiftBar plugin. It refreshes every minute.
 - `session-search.swift`: source for the search panel, compiled once during install.
 
 ## Requirements
@@ -22,7 +22,7 @@ A SwiftBar menu that lists your Claude Code sessions grouped by folder, with a S
 ## Install steps (for Claude)
 
 1. Find SwiftBar's plugin folder: `defaults read com.ameba.SwiftBar PluginDirectory`.
-2. Copy `claude-sessions.1m.py` into that folder as a single file and `chmod +x` it. If a file with that name is already there, show it to the user and ask before replacing it.
+2. Copy `claude-code-sessions.1m.py` into that folder as a single file and `chmod +x` it. If a file with that name is already there, show it to the user and ask before replacing it.
 3. Compile the search panel:
    ```sh
    mkdir -p ~/.local/share/claude-code-sessions
