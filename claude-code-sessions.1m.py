@@ -288,7 +288,10 @@ def render():
         live = sum(s["open"] for s in items)
         badge = f" · {live} open" if live else ""
         badge += " · folder missing" if items[0].get("missing") else ""
-        print(f'{clean(os.path.basename(cwd.rstrip("/")) or cwd)} ({len(items)}{badge}) | sfimage=folder '
+        # Filled folder: at least one of its sessions is running right now.
+        icon = ("sfimage=folder.badge.questionmark" if items[0].get("missing")
+                else "sfimage=folder.fill" if live else "sfimage=folder")
+        print(f'{clean(os.path.basename(cwd.rstrip("/")) or cwd)} ({len(items)}{badge}) | {icon} '
               'bash=/usr/bin/true terminal=false refresh=false')  # SwiftBar greys rows without an action
         # The full path goes inside the submenu; a tooltip would cover the first rows.
         print(f'--{tilde(cwd)} | {HEAD}')
