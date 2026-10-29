@@ -17,7 +17,7 @@ Supacode installed, a session that is already running is refocused in its Supaco
 in Supacode and `claude --resume <id>` runs in a new tab. Without Supacode, it resumes
 in a new Terminal window. On failure it notifies and copies the command.
 `claude-sessions.1m.py index` prints the session list as JSON for the search panel
-(~/.local/share/claude-sessions-menu/session-search).
+(~/.local/share/claude-code-sessions/session-search).
 
 The cache and index hold words from every conversation, so they are readable by the
 owner only (folder 0700, files 0600).
@@ -29,14 +29,16 @@ from urllib.parse import unquote
 
 CLAUDE_DIR = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
 PROJECTS = os.path.join(CLAUDE_DIR, "projects")
-CACHE_DIR = os.path.expanduser("~/.cache/claude-sessions-menu")
+CACHE_DIR = os.path.expanduser("~/.cache/claude-code-sessions")
 CACHE = os.path.join(CACHE_DIR, "cache.json")
 INDEX = os.path.join(CACHE_DIR, "index.json")  # read by the search panel
+FOLDERS = os.path.join(CACHE_DIR, "folders.json")  # folder path -> [device, inode], to follow renames
+MOVE_LOG = os.path.expanduser("~/.local/state/claude-code-sessions/moves.log")
 # SwiftBar runs plugins with a minimal PATH, so look in the app bundle first.
 SUPACODE = next((p for p in ("/Applications/supacode.app/Contents/Resources/bin/supacode",
                              os.path.expanduser("~/Applications/supacode.app/Contents/Resources/bin/supacode"))
                  if os.access(p, os.X_OK)), None) or shutil.which("supacode")
-SEARCH = os.path.expanduser("~/.local/share/claude-sessions-menu/session-search")
+SEARCH = os.path.expanduser("~/.local/share/claude-code-sessions/session-search")
 SESSION_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 MAX_DAYS = 365         # hide sessions idle longer than this
@@ -118,16 +120,87 @@ def running():
     return live
 
 
+def folder_id(path):
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return [st.st_dev, st.st_ino] if os.path.isdir(path) else None
+
+
+def find_renamed(cwd, known):
+    """Where a vanished folder went, or None.
+
+    A rename on the same disk keeps the folder's device and inode. Walk down from the
+    nearest surviving parent; at each missing step, look for the remembered identity
+    among that level's subfolders. This covers renaming the folder itself or any parent.
+    """
+    parts = cwd.rstrip("/").split("/")
+    i = len(parts)
+    while i > 1 and not os.path.isdir("/".join(parts[:i])):
+        i -= 1
+    here = "/".join(parts[:i]) or "/"
+    for j in range(i, len(parts)):
+        step = os.path.join(here, parts[j])
+        if os.path.isdir(step):
+            here = step
+            continue
+        want = known.get("/".join(parts[:j + 1]))
+        if not want:
+            return None
+        try:
+            with os.scandir(here) as entries:
+                here = next((e.path for e in entries if e.is_dir(follow_symlinks=False)
+                             and [e.stat(follow_symlinks=False).st_dev, e.inode()] == want), None)
+        except OSError:
+            return None
+        if here is None:
+            return None
+    return here
+
+
+def track_folders(cwds):
+    """{recorded folder: where it is now, or None when it's gone without a trace}."""
+    try:
+        with open(FOLDERS) as f:
+            known = json.load(f)
+    except Exception:
+        known = {}
+    before, where = dict(known), {}
+    for cwd in cwds:
+        now = cwd if os.path.isdir(cwd) else find_renamed(cwd, known)
+        where[cwd] = now
+        path = now
+        while path:  # remember the folder and every parent, so a renamed parent is found too
+            fid = folder_id(path)
+            if fid:
+                known[path] = fid
+            parent = os.path.dirname(path)
+            path = None if parent == path else parent
+    if known != before:
+        try:
+            write_atomic(FOLDERS, known)
+        except OSError:
+            pass
+    return where
+
+
+def slug(path):
+    """The folder name Claude Code files a path's sessions under."""
+    return re.sub(r"[^A-Za-z0-9]", "-", path)
+
+
 def load_sessions():
     try:
         with open(CACHE) as f:
             cache = json.load(f)
     except Exception:
         cache = {}
+    os.makedirs(CACHE_DIR, mode=0o700, exist_ok=True)
     fresh, sessions, cutoff = {}, [], time.time() - MAX_DAYS * 86400
     live = running()
-    for slug in os.listdir(PROJECTS) if os.path.isdir(PROJECTS) else []:
-        folder = os.path.join(PROJECTS, slug)
+    for slug_dir in os.listdir(PROJECTS) if os.path.isdir(PROJECTS) else []:
+        folder = os.path.join(PROJECTS, slug_dir)
         for name in os.listdir(folder) if os.path.isdir(folder) else []:
             sid = name[:-6]
             if not name.endswith(".jsonl") or not SESSION_ID.match(sid):
@@ -153,9 +226,15 @@ def load_sessions():
             title = custom or info["custom"] or info["agent"] or info["ai"] or info["prompt"]
             sessions.append({"id": sid, "mtime": st.st_mtime, "title": " ".join(title.split()),
                              "named": title != info["prompt"], "open": sid in live,
-                             "cwd": info["cwd"] or "?", "words": info["words"]})
+                             "cwd": info["cwd"] or "?", "dir": slug_dir, "words": info["words"]})
+    where = track_folders({s["cwd"] for s in sessions if s["cwd"] != "?"})
+    for s in sessions:
+        now = where.get(s["cwd"])
+        if now is None and s["cwd"] != "?":
+            s["missing"] = True
+        elif now and now != s["cwd"]:
+            s["renamed_from"], s["cwd"] = s["cwd"], now
     try:
-        os.makedirs(CACHE_DIR, mode=0o700, exist_ok=True)
         os.chmod(CACHE_DIR, 0o700)  # also tightens a folder made before this rule
         write_atomic(CACHE, fresh)
         write_atomic(INDEX, sorted(sessions, key=lambda s: s["mtime"], reverse=True))
@@ -203,15 +282,28 @@ def render():
     groups = {}
     for s in sessions:  # already newest first, so folders come out by latest activity
         groups.setdefault(s["cwd"], []).append(s)
+    home = os.path.expanduser("~")
+    tilde = lambda p: (p.replace(home, "~", 1) if p.startswith(home) else p).replace("|", "/")
     for cwd, items in groups.items():
         live = sum(s["open"] for s in items)
         badge = f" · {live} open" if live else ""
+        badge += " · folder missing" if items[0].get("missing") else ""
         print(f'{clean(os.path.basename(cwd.rstrip("/")) or cwd)} ({len(items)}{badge}) | sfimage=folder '
               'bash=/usr/bin/true terminal=false refresh=false')  # SwiftBar greys rows without an action
         # The full path goes inside the submenu; a tooltip would cover the first rows.
-        home = os.path.expanduser("~")
-        path = cwd.replace(home, "~", 1) if cwd.startswith(home) else cwd
-        print(f'--{path.replace("|", "/")} | {HEAD}')
+        print(f'--{tilde(cwd)} | {HEAD}')
+        # Claude Code's own picker, --continue and project memory look up the new name,
+        # so offer to refile sessions still filed under the old one.
+        moved = [s for s in items if s.get("renamed_from") and s["dir"] != slug(s["cwd"])]
+        for o in sorted({s["renamed_from"] for s in moved}):
+            print(f'--renamed from {tilde(o)} | {HEAD}')
+        stale = sorted({s["dir"] for s in moved})
+        for d in stale:
+            n = sum(s["dir"] == d for s in items)
+            print(f'--Move {n} session{"s" if n != 1 else ""} to the new folder name… | bash="{sys.argv[0]}" '
+                  f'param1=move param2={d} terminal=false refresh=true sfimage=arrow.right.doc.on.clipboard')
+        if items[0].get("missing"):
+            print(f'--Renamed or moved before this menu saw it, or deleted | {HEAD}')
         print("-----")
         for s in items[:PER_FOLDER]:
             print(row(s))
@@ -280,9 +372,13 @@ def open_session(sid):
         match = None
     match = match or next((s for s in load_sessions() if s["id"] == sid), None)
     command = f"claude --resume {sid}"
-    cwd = match["cwd"] if match else ""
-    # claude --resume only finds a session from the folder it was started in.
+    cwd = match["cwd"] if match else ""  # already followed across a rename
+    # Resume finds the session by id from anywhere; run it in its folder so its tools
+    # work on the right files.
     full = f"cd {shlex.quote(cwd)} && {command}" if cwd else command
+    if cwd and not os.path.isdir(cwd):
+        notify("This session's folder is gone.", command)
+        return
     pid = running().get(sid)
     try:
         if pid:
@@ -307,9 +403,64 @@ def open_session(sid):
     notify("Couldn't open the session.", full)
 
 
+def log_move(line):
+    os.makedirs(os.path.dirname(MOVE_LOG), exist_ok=True)
+    with open(MOVE_LOG, "a") as f:
+        f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {line}\n")
+
+
+def merge_into(src, dst, skipped):
+    """Move src's entries into dst without overwriting anything that differs."""
+    for name in sorted(os.listdir(src)):
+        a, b = os.path.join(src, name), os.path.join(dst, name)
+        if not os.path.lexists(b):
+            os.rename(a, b)
+        elif os.path.isdir(a) and os.path.isdir(b) and not os.path.islink(a):
+            merge_into(a, b, skipped)
+        elif os.path.isfile(b) and (os.path.getsize(b) == 0 or open(a, "rb").read() == open(b, "rb").read()):
+            os.replace(a, b)  # the new copy is empty or identical
+        else:
+            skipped.append(a)
+    if not os.listdir(src):
+        os.rmdir(src)
+
+
+def move_folder(old_dir):
+    """Refile a renamed folder's sessions (and project memory) under its new name."""
+    if not re.fullmatch(r"[A-Za-z0-9-]+", old_dir):
+        return
+    sessions = load_sessions()
+    group = [s for s in sessions if s["dir"] == old_dir and s.get("renamed_from")
+             and s["dir"] != slug(s["cwd"])]
+    if not group:
+        return notify("Nothing to move: the folder isn't marked as renamed.")
+    new_cwd = group[0]["cwd"]
+    new_dir = slug(new_cwd)
+    if len(new_dir) > 200:  # Claude Code shortens long names in a way this can't reproduce
+        return notify("The new folder path is too long to refile safely.")
+    if any(s["open"] for s in sessions if s["dir"] == old_dir):
+        return notify("Close the running sessions from this folder first, then try again.")
+    prompt = (f"Move {len(group)} Claude Code session(s) and the folder's project memory from "
+              f"{group[0]['renamed_from']} to {new_cwd}? Claude Code's resume picker, "
+              "--continue and memory will then find them under the new name.")
+    asked = subprocess.run(["osascript", "-e", f'display dialog {applescript_str(prompt)} '
+                            'buttons {"Cancel", "Move"} default button "Move" with title "Claude sessions"'],
+                           capture_output=True)
+    if asked.returncode != 0:
+        return
+    src, dst, skipped = os.path.join(PROJECTS, old_dir), os.path.join(PROJECTS, new_dir), []
+    os.makedirs(dst, exist_ok=True)
+    merge_into(src, dst, skipped)
+    log_move(f"moved {src} -> {dst}" + (f"; kept (conflict): {', '.join(skipped)}" if skipped else ""))
+    notify(f"Moved {len(group)} session(s) to the new folder name."
+           + (f" {len(skipped)} file(s) differed and stayed in the old place; see {MOVE_LOG}." if skipped else ""))
+
+
 if __name__ == "__main__":
     if len(sys.argv) >= 3 and sys.argv[1] == "open":
         open_session(sys.argv[2])
+    elif len(sys.argv) >= 3 and sys.argv[1] == "move":
+        move_folder(sys.argv[2])
     elif len(sys.argv) >= 2 and sys.argv[1] == "index":
         load_sessions()  # rewrites INDEX
     else:

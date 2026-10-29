@@ -18,6 +18,7 @@ You need macOS, the Xcode Command Line Tools and SwiftBar. Supacode is optional.
 
 - Everything stays on your Mac. It reads the session files Claude Code keeps in `~/.claude`, and the search index it builds is readable by you only.
 - It lists Claude Code sessions only, from every account you've logged into on this Mac user. claude.ai chats aren't stored locally, so they don't appear.
+- **Renamed folders stay findable.** If you rename a project folder or one of its parents in Finder, the menu follows it, lists its sessions under the new name and resumes them there. Claude Code itself loses track: its resume picker, `--continue` and project memory look under the new name and find nothing. One click on **Move sessions to the new folder name** refiles them so Claude Code finds them again.
 - For usage limits and cost in the status line and menu bar, see [claude-code-meter](https://github.com/yash201040/claude-code-meter).
 
 ## License
