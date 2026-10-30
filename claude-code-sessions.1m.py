@@ -1,6 +1,6 @@
 #!/usr/bin/python3 -I
 # <xbar.title>Claude Code sessions</xbar.title>
-# <xbar.desc>Recent Claude Code sessions grouped by folder; click one to resume it in Supacode or Terminal.</xbar.desc>
+# <xbar.desc>Recent Claude Code sessions grouped by folder; click one to resume it in Herdr, Supacode or Terminal.</xbar.desc>
 # <swiftbar.hideRunInTerminal>true</swiftbar.hideRunInTerminal>
 # <swiftbar.hideDisablePlugin>true</swiftbar.hideDisablePlugin>
 # <swiftbar.hideSwiftBar>true</swiftbar.hideSwiftBar>
@@ -11,11 +11,13 @@ Each transcript is parsed once and cached by mtime and size, so a refresh only
 re-reads sessions that changed. Titles follow the picker's order: /rename title,
 then the generated title, then the first prompt. Read-only; no network.
 
-Invoked as `claude-code-sessions.1m.py open <session-id>` when a row is clicked. With
-Supacode installed, a session that is already running is refocused in its Supacode tab
-(found through the running process's SUPACODE_TAB_ID); otherwise its folder is opened
-in Supacode and `claude --resume <id>` runs in a new tab. Without Supacode, it resumes
-in a new Terminal window. On failure it notifies and copies the command.
+Invoked as `claude-code-sessions.1m.py open <session-id>` when a row is clicked. A session
+that is already running is refocused where it runs: its Herdr pane (found through Herdr's
+agent list, on the socket in the process's HERDR_SOCKET_PATH) with the Ghostty window
+showing Herdr raised, or its Supacode tab (through SUPACODE_TAB_ID). Otherwise
+`claude --resume <id>` runs in a new tab: with Herdr installed, in the workspace already on
+that git checkout or folder, or a new workspace; with Supacode, in its worktree; without
+either, in a new Terminal window. On failure it notifies and copies the command.
 `claude-code-sessions.1m.py index` prints the session list as JSON for the search panel
 (~/.local/share/claude-code-sessions/session-search).
 
@@ -38,6 +40,9 @@ MOVE_LOG = os.path.expanduser("~/.local/state/claude-code-sessions/moves.log")
 SUPACODE = next((p for p in ("/Applications/supacode.app/Contents/Resources/bin/supacode",
                              os.path.expanduser("~/Applications/supacode.app/Contents/Resources/bin/supacode"))
                  if os.access(p, os.X_OK)), None) or shutil.which("supacode")
+HERDR = next((p for p in ("/opt/homebrew/bin/herdr", "/usr/local/bin/herdr",
+                          os.path.expanduser("~/.local/bin/herdr"))
+              if os.access(p, os.X_OK)), None) or shutil.which("herdr")
 SEARCH = os.path.expanduser("~/.local/share/claude-code-sessions/session-search")
 SESSION_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
@@ -351,13 +356,109 @@ def open_in_terminal(command):
     return subprocess.run(["osascript", "-e", script], capture_output=True, timeout=30).returncode == 0
 
 
-def focus_running(pid):
-    """Focus the Supacode tab hosting this Claude process. False if it isn't in Supacode."""
+def herdr(*args, socket=None, timeout=30):
+    """Run a Herdr command; its result, or {} for the commands that print nothing."""
+    env = {**os.environ, "HERDR_SOCKET_PATH": socket} if socket else None
+    done = subprocess.run([HERDR, *args], capture_output=True, text=True, timeout=timeout, env=env)
+    done.check_returncode()
+    return json.loads(done.stdout)["result"] if done.stdout.strip() else {}
+
+
+def herdr_up():
+    out = subprocess.run([HERDR, "status", "server"], capture_output=True, text=True, timeout=10).stdout
+    return "status: running" in out
+
+
+def show_herdr():
+    """Raise the Ghostty window attached to Herdr, or open one (which also starts Herdr's server)."""
+    clients = subprocess.run(["ps", "-axo", "tty=,command="], capture_output=True, text=True).stdout
+    ttys = [f"/dev/{m[1]}" for m in re.finditer(r"^\s*(ttys\d+)\s+(?:\S*/)?herdr(?: --session \S+)?\s*$",
+                                                clients, re.M)]
+    wanted = "{" + ", ".join(applescript_str(t) for t in ttys) + "}"
+    script = f"""set wasRunning to application "Ghostty" is running
+tell application "Ghostty"
+activate
+if not wasRunning then delay 1
+repeat with t in terminals
+    if {wanted} contains (tty of t) then
+        focus t
+        return
+    end if
+end repeat
+set others to windows
+new window with configuration {{command:{applescript_str(HERDR)}}}
+-- A Ghostty that just launched opened its own empty window; don't leave it behind.
+if not wasRunning then
+    repeat with w in others
+        close window w
+    end repeat
+end if
+end tell"""
+    if subprocess.run(["osascript", "-e", script], capture_output=True, timeout=30).returncode != 0:
+        subprocess.run(["open", "-a", "Ghostty"])
+
+
+def focus_herdr(sid, env):
+    """Focus the Herdr pane hosting this Claude process. False if it isn't in Herdr."""
+    socket = re.search(r"\bHERDR_SOCKET_PATH=(\S+)", env)
+    pane = re.search(r"\bHERDR_PANE_ID=(\S+)", env)
+    if not (HERDR and socket and pane):
+        return False
+    try:
+        # A pane moved to another workspace gets a new id, so ask Herdr before trusting the env.
+        agents = herdr("agent", "list", socket=socket[1])["agents"]
+        target = next((a["pane_id"] for a in agents if (a.get("agent_session") or {}).get("value") == sid),
+                      pane[1])
+        herdr("agent", "focus", target, socket=socket[1])
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+        return False
+    show_herdr()
+    return True
+
+
+def project_root(path):
+    """The git checkout holding path, else path itself."""
+    path = here = os.path.realpath(path)
+    while here != "/":
+        if os.path.exists(os.path.join(here, ".git")):
+            return here
+        here = os.path.dirname(here)
+    return path
+
+
+def find_workspace(cwd):
+    """The Herdr workspace with a pane in cwd or, failing that, in the same checkout."""
+    root, panes = project_root(cwd), herdr("pane", "list")["panes"]
+    same = [p for p in panes if p.get("cwd") and project_root(p["cwd"]) == root]
+    return min(same, key=lambda p: p["cwd"] != cwd)["workspace_id"] if same else None
+
+
+def resume_in_herdr(cwd, title, command):
+    show_herdr()
+    for _ in range(40):  # a window opened just now is still starting the server
+        if herdr_up():
+            break
+        time.sleep(0.25)
+    where = ["--cwd", cwd] if cwd else []
+    workspace = find_workspace(cwd) if cwd else None
+    if workspace:
+        made = herdr("tab", "create", "--workspace", workspace, *where, "--label", title, "--focus")
+    else:
+        label = os.path.basename(cwd.rstrip("/")) or "Claude"
+        made = herdr("workspace", "create", *where, "--label", label, "--focus")
+        herdr("tab", "rename", made["tab"]["tab_id"], title)
+    herdr("pane", "run", made["root_pane"]["pane_id"], command)
+
+
+def focus_running(sid, pid):
+    """Focus the Herdr pane or Supacode tab hosting this Claude process. False if it's in neither."""
     env = subprocess.run(["ps", "-E", "-ww", "-p", str(pid), "-o", "command="],
                          capture_output=True, text=True).stdout
+    if focus_herdr(sid, env):
+        return True
     tab = re.search(r"\bSUPACODE_TAB_ID=(\S+)", env)
     wt = re.search(r"\bSUPACODE_WORKTREE_ID=(\S+)", env)
-    if not (tab and wt) or tab.group(1) not in supacode("tab", "list", "-w", wt.group(1)).stdout:
+    if not (SUPACODE and tab and wt) or tab.group(1) not in supacode("tab", "list", "-w", wt.group(1)).stdout:
         return False
     supacode("worktree", "focus", "-w", wt.group(1))
     supacode("tab", "focus", "-w", wt.group(1), "-t", tab.group(1))
@@ -385,8 +486,11 @@ def open_session(sid):
     pid = running().get(sid)
     try:
         if pid:
-            if not (SUPACODE and focus_running(pid)):
+            if not focus_running(sid, pid):
                 notify("This session is already open in another window.")
+            return
+        if HERDR:
+            resume_in_herdr(cwd, clean(match["title"] if match else sid), command)
             return
         if SUPACODE:
             wt = find_worktree(cwd) if cwd else None
@@ -401,7 +505,7 @@ def open_session(sid):
                 return
         if open_in_terminal(full):
             return
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError):
         pass
     notify("Couldn't open the session.", full)
 

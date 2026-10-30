@@ -4,7 +4,7 @@ These are instructions for Claude Code. Give it this folder or the repo URL and 
 
 ## What it is
 
-A SwiftBar menu that lists your Claude Code sessions grouped by folder, with a Spotlight-style search over titles and conversation text. Clicking a session resumes it with `claude --resume <id>`: in a new Supacode tab if [Supacode](https://supacode.sh) is installed (or focuses the tab if it's already open), otherwise in a new Terminal window.
+A SwiftBar menu that lists your Claude Code sessions grouped by folder, with a Spotlight-style search over titles and conversation text. Clicking a session resumes it with `claude --resume <id>`: in a new Herdr tab if [Herdr](https://github.com/herdrdev/herdr) is installed, in a new Supacode tab if [Supacode](https://supacode.sh) is installed, otherwise in a new Terminal window. A session that's already running in Herdr or Supacode is focused there instead.
 
 ## Files
 
@@ -17,7 +17,8 @@ A SwiftBar menu that lists your Claude Code sessions grouped by folder, with a S
 - The Xcode Command Line Tools, which provide `/usr/bin/python3` and `swiftc`. If `swiftc` is missing, ask the user before running `xcode-select --install`.
 - [SwiftBar](https://github.com/swiftbar/SwiftBar). If it's missing, ask before running `brew install --cask swiftbar`. The user opens it once and picks a plugin folder.
 - Claude Code.
-- Supacode is optional. Don't install it. The plugin detects it at `/Applications/supacode.app` or `~/Applications/supacode.app` and uses Terminal otherwise.
+- Herdr and Supacode are optional. Don't install them. The plugin looks for `herdr` in `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin` and `PATH`, then for Supacode at `/Applications/supacode.app` or `~/Applications/supacode.app`, and uses Terminal if it finds neither. If both are installed, new tabs open in Herdr.
+- Herdr needs [Ghostty](https://ghostty.org) 1.4 or newer here, because the plugin uses Ghostty's AppleScript support to raise the window showing Herdr, or to open one when none is attached.
 
 ## Install steps (for Claude)
 
@@ -34,11 +35,12 @@ A SwiftBar menu that lists your Claude Code sessions grouped by folder, with a S
 5. Check the install:
    - `<plugin path> index` writes `~/.cache/claude-code-sessions/index.json`.
    - Running the plugin with no arguments prints the menu.
-6. Without Supacode, tell the user that the first click asks for permission to control Terminal, and that they should allow it.
+6. With Herdr, tell the user that the first click asks for permission to control Ghostty, and that they should allow it. Without Herdr or Supacode, the same goes for Terminal.
 
 ## Notes
 
 - Titles come in this order: the `/rename` title, then Claude's generated title, then the first prompt (shown in grey). ● marks a session that is running now.
+- In Herdr, a resumed session opens as a tab in the workspace that has a pane in the same folder or git checkout, or else in a new workspace named after the folder. If no Herdr server is running, the Ghostty window the plugin opens starts one. A session that's already running is found through Herdr's agent list, including in named Herdr sessions.
 - Only Claude Code sessions in `~/.claude` (or `$CLAUDE_CONFIG_DIR`) are listed. claude.ai chats live on Anthropic's servers and don't appear.
 - Search reads an index in `~/.cache/claude-code-sessions/`. It holds words from every conversation, so it's readable by its owner only. Nothing is sent anywhere.
 - Renamed folders: the plugin remembers each session folder's identity (device and inode, which a rename keeps) in `~/.cache/claude-code-sessions/folders.json`. When a folder or one of its parents is renamed on the same disk, sessions show under the new name and resume there. A folder renamed before the menu first saw it, moved to another disk or deleted shows as "folder missing".

@@ -1,6 +1,6 @@
 # claude-code-sessions
 
-A macOS menu-bar list of your [Claude Code](https://code.claude.com) sessions, grouped by folder, with a Spotlight-style search over titles and conversation text. Click a session to resume it: in a new [Supacode](https://supacode.sh) tab if you use Supacode, otherwise in Terminal. Runs on [SwiftBar](https://swiftbar.app).
+A macOS menu-bar list of your [Claude Code](https://code.claude.com) sessions, grouped by folder, with a Spotlight-style search over titles and conversation text. Click a session to resume it: in a new [Herdr](https://github.com/herdrdev/herdr) tab inside [Ghostty](https://ghostty.org) if you use Herdr, a new [Supacode](https://supacode.sh) tab if you use Supacode, otherwise in Terminal. A session that's already running is brought to the front instead. Runs on [SwiftBar](https://swiftbar.app).
 
 ![The search panel listing recent Claude Code sessions](docs/search.png)
 
@@ -12,7 +12,7 @@ Open Claude Code and say:
 
 Claude clones the repo and follows [INSTALL.md](INSTALL.md). It checks the requirements, asks before installing anything or replacing a file, compiles the search panel and tests the plugin.
 
-You need macOS, the Xcode Command Line Tools and SwiftBar. Supacode is optional.
+You need macOS, the Xcode Command Line Tools and SwiftBar. Herdr (with Ghostty 1.4 or newer) and Supacode are optional.
 
 ## Notes
 
