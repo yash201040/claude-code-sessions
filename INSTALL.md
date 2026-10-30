@@ -4,7 +4,7 @@ These are instructions for Claude Code. Give it this folder or the repo URL and 
 
 ## What it is
 
-A SwiftBar menu that lists your Claude Code sessions grouped by folder, with a Spotlight-style search over titles and conversation text. Clicking a session resumes it with `claude --resume <id>`: in a new Herdr tab if [Herdr](https://github.com/herdrdev/herdr) is installed, in a new Supacode tab if [Supacode](https://supacode.sh) is installed, otherwise in a new Terminal window. A session that's already running in Herdr or Supacode is focused there instead.
+A SwiftBar menu that lists your Claude Code sessions grouped by folder, with a Spotlight-style search over titles and conversation text. Clicking a session resumes it with `claude --resume <id>` in a new [Herdr](https://github.com/herdrdev/herdr) tab inside [Ghostty](https://ghostty.org). A session that's already running in Herdr or [Supacode](https://supacode.sh) is focused there instead.
 
 ## Files
 
@@ -17,8 +17,9 @@ A SwiftBar menu that lists your Claude Code sessions grouped by folder, with a S
 - The Xcode Command Line Tools, which provide `/usr/bin/python3` and `swiftc`. If `swiftc` is missing, ask the user before running `xcode-select --install`.
 - [SwiftBar](https://github.com/swiftbar/SwiftBar). If it's missing, ask before running `brew install --cask swiftbar`. The user opens it once and picks a plugin folder.
 - Claude Code.
-- Herdr and Supacode are optional. Don't install them. The plugin looks for `herdr` in `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin` and `PATH`, then for Supacode at `/Applications/supacode.app` or `~/Applications/supacode.app`, and uses Terminal if it finds neither. If both are installed, new tabs open in Herdr.
-- Herdr needs [Ghostty](https://ghostty.org) 1.4 or newer here, because the plugin uses Ghostty's AppleScript support to raise the window showing Herdr, or to open one when none is attached.
+- [Herdr](https://github.com/herdrdev/herdr). If it's missing, ask before running `brew install herdr`. The plugin looks for it in `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin` and `PATH`.
+- [Ghostty](https://ghostty.org) 1.4 or newer. If it's missing, ask before running `brew install --cask ghostty`. The plugin uses Ghostty's AppleScript support to raise the window showing Herdr, or to open one when none is attached.
+- Supacode is optional. Don't install it. If it's there, sessions running in it are focused there. New tabs open in Herdr, and if Herdr is missing, in Supacode or then Terminal.
 
 ## Install steps (for Claude)
 
@@ -35,7 +36,7 @@ A SwiftBar menu that lists your Claude Code sessions grouped by folder, with a S
 5. Check the install:
    - `<plugin path> index` writes `~/.cache/claude-code-sessions/index.json`.
    - Running the plugin with no arguments prints the menu.
-6. With Herdr, tell the user that the first click asks for permission to control Ghostty, and that they should allow it. Without Herdr or Supacode, the same goes for Terminal.
+6. Tell the user that the first click asks for permission to control Ghostty, and that they should allow it.
 
 ## Notes
 
