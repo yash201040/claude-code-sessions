@@ -52,6 +52,33 @@ HARNESS = ("<local-command", "<system-reminder", "<task-notification", "<bash-",
            "[Request interrupted", "This session is being continued")
 
 
+def account():
+    """The Claude account Claude Code is signed in to, from its own config (no network)."""
+    cfg = os.environ.get("CLAUDE_CONFIG_DIR")
+    path = os.path.join(cfg, ".claude.json") if cfg else os.path.expanduser("~/.claude.json")
+    try:
+        with open(path) as f:
+            a = json.load(f).get("oauthAccount") or {}
+    except Exception:
+        return None
+    name = a.get("displayName") or a.get("fullName") or a.get("emailAddress")
+    if not name:
+        return None
+    return name, a.get("emailAddress") or "", a.get("planDisplayName") or ""
+
+
+def account_rows():
+    acc = account()
+    if not acc:
+        return ["Not signed in to Claude | " + HEAD]
+    name, email, plan = acc
+    clean_ = lambda t: t.replace("|", "/")
+    rows = ["Signed in as %s%s | sfimage=person.crop.circle" % (clean_(name), " · " + clean_(plan) if plan else "")]
+    if email and email != name:
+        rows.append("--%s | %s" % (clean_(email), HEAD))
+    return rows
+
+
 def first_prompt(record):
     if record.get("isMeta") or record.get("isSidechain"):
         return None
@@ -273,6 +300,9 @@ def row(s):
 def render():
     sessions = load_sessions()
     print("| sfimage=text.bubble")
+    print("---")
+    for line in account_rows():
+        print(line)
     print("---")
     print(f'Search sessions… | bash="{SEARCH}" param1="{sys.argv[0]}" terminal=false '
           'refresh=false sfimage=magnifyingglass')
