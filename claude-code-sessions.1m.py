@@ -89,7 +89,7 @@ def first_prompt(record):
     if not isinstance(content, str):
         return None
     text = content.strip()
-    if text.startswith("<command-name>") or text.startswith(HARNESS):
+    if text.startswith(("<command-name>", "<command-message>")) or text.startswith(HARNESS):
         return None
     # Keep pasted text: dictation apps paste what the person said.
     text = re.sub(r"<pasted_content[^>]*>(.*?)</pasted_content[^>]*>", r" \1 ", text, flags=re.S)
@@ -97,8 +97,27 @@ def first_prompt(record):
     return " ".join(text.split()) or None
 
 
+SLASH = re.compile(r"<command-name>/?([^<]+)</command-name>")
+SLASH_ARGS = re.compile(r"<command-args>(.*?)</command-args>", re.S)
+
+
+def slash_command(record):
+    """'/name args' for a prompt that was only a slash command, else None."""
+    if record.get("isMeta") or record.get("isSidechain"):
+        return None
+    content = (record.get("message") or {}).get("content")
+    if isinstance(content, list):
+        content = " ".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")
+    m = SLASH.search(content) if isinstance(content, str) else None
+    if not m:
+        return None
+    args = SLASH_ARGS.search(content)
+    return " ".join(("/" + m.group(1).strip() + " " + (args.group(1) if args else "")).split())
+
+
 def summarize(path):
-    info = {"cwd": None, "custom": None, "ai": None, "agent": None, "prompt": None}
+    info = {"cwd": None, "custom": None, "ai": None, "agent": None, "prompt": None, "entry": None,
+            "cmd": None}
     words = {}
     with open(path, encoding="utf-8", errors="replace") as handle:
         for line in handle:
@@ -111,6 +130,8 @@ def summarize(path):
             kind = record.get("type")
             if not info["cwd"] and record.get("cwd"):
                 info["cwd"] = record["cwd"]
+            if not info["entry"] and record.get("entrypoint"):
+                info["entry"] = record["entrypoint"]
             if kind == "custom-title":
                 info["custom"] = record.get("customTitle") or info["custom"]
             elif kind == "ai-title":
@@ -119,6 +140,8 @@ def summarize(path):
                 info["agent"] = record.get("agentName") or info["agent"]
             elif kind == "user":
                 prompt = first_prompt(record)
+                if not prompt and not info["cmd"]:
+                    info["cmd"] = slash_command(record)  # the title when nothing was typed
                 if prompt:
                     info["prompt"] = info["prompt"] or prompt
                     words.update(dict.fromkeys(WORD.findall(prompt.lower())))
@@ -212,6 +235,18 @@ def track_folders(cwds):
     return where
 
 
+TEMP_ROOTS = ("/tmp/", "/private/tmp/", "/var/folders/", "/private/var/folders/")
+
+
+def is_indirect(info):
+    """A session an agent started rather than the person: run headless with
+    `claude -p` (entrypoint sdk-cli), or opened in a system temp folder or a
+    crucible run folder, which only agents create."""
+    cwd = (info.get("cwd") or "").rstrip("/") + "/"
+    return (info.get("entry") == "sdk-cli" or cwd.startswith(TEMP_ROOTS)
+            or "/.crucible/" in cwd)
+
+
 def slug(path):
     """The folder name Claude Code files a path's sessions under."""
     return re.sub(r"[^A-Za-z0-9]", "-", path)
@@ -239,21 +274,23 @@ def load_sessions():
                 continue
             if st.st_mtime < cutoff:
                 continue
-            key = f"v2:{st.st_mtime_ns}:{st.st_size}"  # bump v2 when summarize() changes
+            key = f"v4:{st.st_mtime_ns}:{st.st_size}"  # bump v4 when summarize() changes
             hit = cache.get(path)
             info = hit["info"] if hit and hit.get("key") == key and "words" in hit["info"] else summarize(path)
             fresh[path] = {"key": key, "info": info}
-            if not info["prompt"]:
+            prompt = info["prompt"] or info.get("cmd")
+            if not prompt:
                 continue  # opened and closed without a prompt
             try:
                 with open(os.path.join(folder, sid, "custom-title.json")) as f:
                     custom = json.load(f).get("customTitle")
             except Exception:
                 custom = None
-            title = custom or info["custom"] or info["agent"] or info["ai"] or info["prompt"]
+            title = custom or info["custom"] or info["agent"] or info["ai"] or prompt
             sessions.append({"id": sid, "mtime": st.st_mtime, "title": " ".join(title.split()),
-                             "named": title != info["prompt"], "open": sid in live,
-                             "cwd": info["cwd"] or "?", "dir": slug_dir, "words": info["words"]})
+                             "named": title != prompt, "open": sid in live,
+                             "cwd": info["cwd"] or "?", "dir": slug_dir, "words": info["words"],
+                             "indirect": is_indirect(info)})
     where = track_folders({s["cwd"] for s in sessions if s["cwd"] != "?"})
     for s in sessions:
         now = where.get(s["cwd"])
@@ -290,11 +327,45 @@ def clean(text):
     return text if len(text) <= TITLE_CHARS else text[:TITLE_CHARS - 1] + "…"
 
 
-def row(s):
+def row(s, depth=1):
     style = "" if s["named"] else " color=#8a8a8a,#a0a0a0"
     mark = "● " if s["open"] else ""
-    return (f'--{mark}{clean(s["title"])}  ·  {ago(s["mtime"])} | bash="{sys.argv[0]}" '
+    return (f'{"--" * depth}{mark}{clean(s["title"])}  ·  {ago(s["mtime"])} | bash="{sys.argv[0]}" '
             f'param1=open param2={s["id"]} terminal=false refresh=false{style}')
+
+
+def tilde(path):
+    home = os.path.expanduser("~")
+    return (path.replace(home, "~", 1) if path.startswith(home) else path).replace("|", "/")
+
+
+def folder_block(cwd, items, depth=0):
+    """One folder row and its submenu, `depth` submenu levels down."""
+    p, sub = "--" * depth, "--" * (depth + 1)
+    live = sum(s["open"] for s in items)
+    badge = f" · {live} open" if live else ""
+    badge += " · folder missing" if items[0].get("missing") else ""
+    # Filled folder: at least one of its sessions is running right now.
+    icon = ("sfimage=folder.badge.questionmark" if items[0].get("missing")
+            else "sfimage=folder.fill" if live else "sfimage=folder")
+    print(f'{p}{clean(os.path.basename(cwd.rstrip("/")) or cwd)} ({len(items)}{badge}) | {icon} '
+          'bash=/usr/bin/true terminal=false refresh=false')  # SwiftBar greys rows without an action
+    # The full path goes inside the submenu; a tooltip would cover the first rows.
+    print(f'{sub}{tilde(cwd)} | {HEAD}')
+    # Claude Code's own picker, --continue and project memory look up the new name,
+    # so offer to refile sessions still filed under the old one.
+    moved = [s for s in items if s.get("renamed_from") and s["dir"] != slug(s["cwd"])]
+    for o in sorted({s["renamed_from"] for s in moved}):
+        print(f'{sub}renamed from {tilde(o)} | {HEAD}')
+    for d in sorted({s["dir"] for s in moved}):
+        n = sum(s["dir"] == d for s in items)
+        print(f'{sub}Move {n} session{"s" if n != 1 else ""} to the new folder name… | bash="{sys.argv[0]}" '
+              f'param1=move param2={d} terminal=false refresh=true sfimage=arrow.right.doc.on.clipboard')
+    if items[0].get("missing"):
+        print(f'{sub}Renamed or moved before this menu saw it, or deleted | {HEAD}')
+    print(f'{sub}---')
+    for s in items[:PER_FOLDER]:
+        print(row(s, depth + 1))
 
 
 def render():
@@ -309,37 +380,23 @@ def render():
     print("---")
     if not sessions:
         print(f"No sessions in the last {MAX_DAYS} days | {HEAD}")
-    groups = {}
+    groups, indirect = {}, {}
     for s in sessions:  # already newest first, so folders come out by latest activity
-        groups.setdefault(s["cwd"], []).append(s)
-    home = os.path.expanduser("~")
-    tilde = lambda p: (p.replace(home, "~", 1) if p.startswith(home) else p).replace("|", "/")
+        (indirect if s.get("indirect") else groups).setdefault(s["cwd"], []).append(s)
     for cwd, items in groups.items():
-        live = sum(s["open"] for s in items)
-        badge = f" · {live} open" if live else ""
-        badge += " · folder missing" if items[0].get("missing") else ""
-        # Filled folder: at least one of its sessions is running right now.
-        icon = ("sfimage=folder.badge.questionmark" if items[0].get("missing")
-                else "sfimage=folder.fill" if live else "sfimage=folder")
-        print(f'{clean(os.path.basename(cwd.rstrip("/")) or cwd)} ({len(items)}{badge}) | {icon} '
-              'bash=/usr/bin/true terminal=false refresh=false')  # SwiftBar greys rows without an action
-        # The full path goes inside the submenu; a tooltip would cover the first rows.
-        print(f'--{tilde(cwd)} | {HEAD}')
-        # Claude Code's own picker, --continue and project memory look up the new name,
-        # so offer to refile sessions still filed under the old one.
-        moved = [s for s in items if s.get("renamed_from") and s["dir"] != slug(s["cwd"])]
-        for o in sorted({s["renamed_from"] for s in moved}):
-            print(f'--renamed from {tilde(o)} | {HEAD}')
-        stale = sorted({s["dir"] for s in moved})
-        for d in stale:
-            n = sum(s["dir"] == d for s in items)
-            print(f'--Move {n} session{"s" if n != 1 else ""} to the new folder name… | bash="{sys.argv[0]}" '
-                  f'param1=move param2={d} terminal=false refresh=true sfimage=arrow.right.doc.on.clipboard')
-        if items[0].get("missing"):
-            print(f'--Renamed or moved before this menu saw it, or deleted | {HEAD}')
+        folder_block(cwd, items)
+    # Sessions agents started (headless runs, temp and crucible folders) sit together
+    # at the bottom, so they don't crowd the folders you work in.
+    if indirect:
+        n = sum(len(v) for v in indirect.values())
+        live = sum(s["open"] for v in indirect.values() for s in v)
+        print("---")
+        print(f'Indirects ({n}{f" · {live} open" if live else ""}) | sfimage=gearshape.2 '
+              'bash=/usr/bin/true terminal=false refresh=false')
+        print(f'--Started by agents: headless runs, temp and crucible folders | {HEAD}')
         print("-----")
-        for s in items[:PER_FOLDER]:
-            print(row(s))
+        for cwd, items in indirect.items():
+            folder_block(cwd, items, 1)
     print("---")
     print("● open in a tab · grey = untitled | " + HEAD)
     print("Refresh | refresh=true")
