@@ -16,6 +16,10 @@ Supacode installed, a session that is already running is refocused in its Supaco
 (found through the running process's SUPACODE_TAB_ID); otherwise its folder is opened
 in Supacode and `claude --resume <id>` runs in a new tab. Without Supacode, it resumes
 in a new Terminal window. On failure it notifies and copies the command.
+Sessions it starts run in the permission mode picked in the menu (auto mode or
+bypass permissions), kept in ~/.local/state/claude-code-sessions/launch-mode and set
+with `claude-code-sessions.1m.py mode <auto|bypass>`. A session that is already
+running keeps the mode it has.
 `claude-code-sessions.1m.py index` prints the session list as JSON for the search panel
 (~/.local/share/claude-code-sessions/session-search).
 
@@ -34,6 +38,11 @@ CACHE = os.path.join(CACHE_DIR, "cache.json")
 INDEX = os.path.join(CACHE_DIR, "index.json")  # read by the search panel
 FOLDERS = os.path.join(CACHE_DIR, "folders.json")  # folder path -> [device, inode], to follow renames
 MOVE_LOG = os.path.expanduser("~/.local/state/claude-code-sessions/moves.log")
+MODE_FILE = os.path.expanduser("~/.local/state/claude-code-sessions/launch-mode")
+# Permission mode for the sessions this menu starts: key -> (menu label, claude flags).
+MODES = {"auto": ("Auto mode", "--permission-mode auto"),
+         "bypass": ("Bypass permissions", "--permission-mode bypassPermissions")}
+DEFAULT_MODE = "bypass"
 # SwiftBar runs plugins with a minimal PATH, so look in the app bundle first.
 SUPACODE = next((p for p in ("/Applications/supacode.app/Contents/Resources/bin/supacode",
                              os.path.expanduser("~/Applications/supacode.app/Contents/Resources/bin/supacode"))
@@ -378,6 +387,8 @@ def render():
     print(f'Search sessions… | bash="{SEARCH}" param1="{sys.argv[0]}" terminal=false '
           'refresh=false sfimage=magnifyingglass')
     print("---")
+    mode_rows()
+    print("---")
     if not sessions:
         print(f"No sessions in the last {MAX_DAYS} days | {HEAD}")
     groups, indirect = {}, {}
@@ -400,6 +411,34 @@ def render():
     print("---")
     print("● open in a tab · grey = untitled | " + HEAD)
     print("Refresh | refresh=true")
+
+
+def launch_mode():
+    try:
+        with open(MODE_FILE) as f:
+            mode = f.read().strip()
+    except OSError:
+        mode = ""
+    return mode if mode in MODES else DEFAULT_MODE
+
+
+def set_mode(mode):
+    if mode not in MODES:
+        return
+    os.makedirs(os.path.dirname(MODE_FILE), exist_ok=True)
+    tmp = MODE_FILE + ".%d" % os.getpid()
+    with open(tmp, "w") as f:
+        f.write(mode + "\n")
+    os.replace(tmp, MODE_FILE)
+
+
+def mode_rows():
+    """The launch-mode switch: one checked row per mode; a click picks it."""
+    current = launch_mode()
+    print(f"Launch sessions in | {HEAD}")
+    for key, (label, flags) in MODES.items():
+        print(f'{label} | bash="{sys.argv[0]}" param1=mode param2={key} terminal=false refresh=true '
+              f'checked={"true" if key == current else "false"} tooltip="claude {flags}"')
 
 
 def find_worktree(cwd):
@@ -461,7 +500,7 @@ def open_session(sid):
     except (OSError, ValueError):
         match = None
     match = match or next((s for s in load_sessions() if s["id"] == sid), None)
-    command = f"claude --resume {sid}"
+    command = f"claude --resume {sid} {MODES[launch_mode()][1]}"
     cwd = match["cwd"] if match else ""  # already followed across a rename
     # Resume finds the session by id from anywhere; run it in its folder so its tools
     # work on the right files.
@@ -551,6 +590,8 @@ if __name__ == "__main__":
         open_session(sys.argv[2])
     elif len(sys.argv) >= 3 and sys.argv[1] == "move":
         move_folder(sys.argv[2])
+    elif len(sys.argv) >= 3 and sys.argv[1] == "mode":
+        set_mode(sys.argv[2])
     elif len(sys.argv) >= 2 and sys.argv[1] == "index":
         load_sessions()  # rewrites INDEX
     else:

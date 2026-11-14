@@ -17,6 +17,7 @@ You need macOS, the Xcode Command Line Tools and SwiftBar. Supacode is optional.
 ## Notes
 
 - Everything stays on your Mac. It reads the session files Claude Code keeps in `~/.claude`, and the search index it builds is readable by you only.
+- **Pick the permission mode sessions launch in.** A switch near the top of the menu, **Auto mode** or **Bypass permissions**, decides how every session you open from the menu or the search panel starts (`claude --resume <id> --permission-mode auto` or `bypassPermissions`). A session that is already running keeps its mode. The choice is kept in `~/.local/state/claude-code-sessions/launch-mode`.
 - **Sessions agents started are kept apart.** Headless `claude -p` runs and sessions opened in a system temp folder or a crucible run folder are grouped under **Indirects** at the bottom, so the folders you work in stay uncluttered.
 - The top of the menu shows the Claude account Claude Code is signed in to, with its plan; hover it for the email. It reads this from Claude Code's own config and makes no network calls.
 - It lists Claude Code sessions only, from every account you've logged into on this Mac user. claude.ai chats aren't stored locally, so they don't appear.
